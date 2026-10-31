@@ -17,19 +17,23 @@ type MajorRow = {
 
 async function MajorList() {
   await connection(); // 요청 때마다 DB에서 읽는다
-  const supabase = getSupabase();
-
   let majors: MajorRow[] = [];
   let error: string | null = null;
-  if (!supabase) {
-    error = "DB 연결 정보(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)가 설정되지 않았습니다.";
-  } else {
-    const res = await supabase
-      .from("majors")
-      .select("id, name, department, grad_requirements(total_credits, general_total, major_basic_total, major_advanced), major_courses(count)")
-      .order("id");
-    if (res.error) error = res.error.message;
-    else majors = res.data as unknown as MajorRow[];
+  try {
+    const supabase = getSupabase();
+    if (!supabase) {
+      error = "DB 연결 정보(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)가 설정되지 않았습니다.";
+    } else {
+      const res = await supabase
+        .from("majors")
+        .select("id, name, department, grad_requirements(total_credits, general_total, major_basic_total, major_advanced), major_courses(count)")
+        .order("id");
+      if (res.error) error = `DB 조회 실패: ${res.error.message}`;
+      else majors = res.data as unknown as MajorRow[];
+    }
+  } catch (e) {
+    // 예: SUPABASE_URL 형식이 잘못되면 createClient가 예외를 던진다
+    error = `DB 연결 오류: ${e instanceof Error ? e.message : String(e)}`;
   }
 
   return (
