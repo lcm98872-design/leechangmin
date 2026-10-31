@@ -36,6 +36,9 @@ export function validateState(v: unknown): PlanState | null {
   if (!int(s.majorId, 1, 1e6) || !int(s.admissionYear, 2000, 2100) || !int(s.maxCredits, 3, 30)) return null;
   if (!isTermKey(s.currentTerm) || !isTermKey(s.targetTerm)) return null;
   if (!ids(s.completed, 200) || !ids(s.inProgress, 60) || !ids(s.interests, 100)) return null;
+  const pastLeaves = s.pastLeaves ?? 0;
+  const leaveTerms = s.leaveTerms ?? [];
+  if (!int(pastLeaves, 0, 20) || !Array.isArray(leaveTerms) || leaveTerms.length > 20 || !leaveTerms.every(isTermKey)) return null;
   if (!Array.isArray(s.items) || s.items.length > 200) return null;
   const items: PlanItem[] = [];
   for (const raw of s.items as unknown[]) {
@@ -51,6 +54,7 @@ export function validateState(v: unknown): PlanState | null {
     majorId: s.majorId as number, admissionYear: s.admissionYear as number,
     currentTerm: s.currentTerm, targetTerm: s.targetTerm, maxCredits: s.maxCredits as number,
     completed: s.completed as number[], inProgress: s.inProgress as number[], interests: s.interests as number[],
+    pastLeaves: pastLeaves as number, leaveTerms: leaveTerms as string[],
     items,
   };
 }
@@ -73,6 +77,7 @@ export async function insertPlan(s: PlanState, status: SavedStatus): Promise<str
     const { data, error } = await db.from("plans").insert({
       code, major_id: s.majorId, admission_year: s.admissionYear, current_term: s.currentTerm,
       target_term: s.targetTerm, max_credits: s.maxCredits, interests: s.interests, status,
+      past_leaves: s.pastLeaves, leave_terms: s.leaveTerms,
     }).select("id").single();
     if (error?.code === "23505") continue; // 코드 충돌 → 다시
     if (error) throw new Error(error.message);
@@ -88,6 +93,7 @@ export async function updatePlan(code: string, s: PlanState, status: SavedStatus
   const { data, error } = await db.from("plans").update({
     major_id: s.majorId, admission_year: s.admissionYear, current_term: s.currentTerm, target_term: s.targetTerm,
     max_credits: s.maxCredits, interests: s.interests, status, updated_at: new Date().toISOString(),
+    past_leaves: s.pastLeaves, leave_terms: s.leaveTerms,
   }).eq("code", code).select("id").maybeSingle();
   if (error) throw new Error(error.message);
   if (!data) return false;
@@ -120,6 +126,7 @@ export async function loadPlan(code: string): Promise<LoadedPlan | null> {
     state: {
       majorId: p.major_id, admissionYear: p.admission_year, currentTerm: p.current_term, targetTerm: p.target_term,
       maxCredits: p.max_credits, interests: p.interests ?? [],
+      pastLeaves: p.past_leaves ?? 0, leaveTerms: p.leave_terms ?? [],
       completed: r.filter((x) => x.status === "completed").map((x) => x.course_id),
       inProgress: r.filter((x) => x.status === "in_progress").map((x) => x.course_id),
       items: r.filter((x) => x.status === "planned").map((x) => ({

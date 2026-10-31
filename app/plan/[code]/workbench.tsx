@@ -117,20 +117,26 @@ export default function Workbench({ code, initial, savedAt, curriculum: cur }: {
           <section className="flex gap-3 overflow-x-auto pb-2">
             <CurrentTermColumn state={state} idx={idx} />
             {ev.terms.map((t) => (
-              <div key={t.key} className={`flex w-60 shrink-0 flex-col rounded-xl border p-3 ${t.load > state.maxCredits ? "border-red-400" : t.afterTarget ? "border-dashed border-orange-400" : "border-zinc-200 dark:border-zinc-800"}`}>
+              <div key={t.key} className={`flex w-60 shrink-0 flex-col rounded-xl border p-3 ${t.leave ? "border-dashed border-amber-400 bg-amber-50/50 dark:bg-amber-950/20" : t.load > state.maxCredits ? "border-red-400" : t.afterTarget ? "border-dashed border-orange-400" : "border-zinc-200 dark:border-zinc-800"}`}>
                 <div className="flex items-baseline justify-between">
                   <h3 className="font-semibold">{termLabel(t.key)}</h3>
-                  <span className="text-xs text-zinc-500">{t.afterTarget ? "졸업학기 이후" : t.grade > 4 ? "초과학기" : `${t.grade}학년`}</span>
+                  <span className="text-xs text-zinc-500">{t.leave ? "휴학" : t.afterTarget ? "졸업학기 이후" : t.grade > 4 ? "초과학기" : `${t.grade}학년`}</span>
+                </div>
+                <div className="mt-1 text-right">
+                  <button onClick={() => run({ type: "toggleLeave", term: t.key }, t.leave ? `${termLabel(t.key)} 휴학 취소` : `${termLabel(t.key)} 휴학`)}
+                    className="text-xs text-amber-700 hover:underline dark:text-amber-400">
+                    {t.leave ? "휴학 취소" : "이 학기 휴학"}
+                  </button>
                 </div>
                 <ul className="mt-2 flex-1 space-y-1.5">
                   {t.items.map((i) => (
-                    <ItemCard key={i.id} item={i} idx={idx} terms={ev.terms.map((x) => x.key)} term={t.key}
+                    <ItemCard key={i.id} item={i} idx={idx} terms={ev.terms.filter((x) => !x.leave).map((x) => x.key)} term={t.key}
                       onMove={(to) => run({ type: "move", itemId: i.id, to }, `${itemName(i, idx)} → ${termLabel(to)}`)}
                       onRemove={() => run({ type: "remove", itemId: i.id }, `${itemName(i, idx)} 뺌`)}
                       onFill={() => setPicker({ term: t.key, slotItemId: i.id, slotType: i.slot?.type })} />
                   ))}
                 </ul>
-                <button onClick={() => setPicker({ term: t.key })} className="mt-2 rounded-lg border border-dashed border-zinc-300 py-1 text-xs text-zinc-500 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-900">+ 과목 추가</button>
+                {!t.leave && <button onClick={() => setPicker({ term: t.key })} className="mt-2 rounded-lg border border-dashed border-zinc-300 py-1 text-xs text-zinc-500 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-900">+ 과목 추가</button>}
                 <div className={`mt-2 flex justify-between border-t border-zinc-200 pt-2 text-sm dark:border-zinc-800 ${t.load > state.maxCredits ? "font-semibold text-red-600" : ""}`}>
                   <span>계획 학점</span>
                   <span>{t.load} / {state.maxCredits}{t.slotCredits > 0 && <span className="ml-1 text-xs text-zinc-500">(빈 칸 {t.slotCredits})</span>}</span>

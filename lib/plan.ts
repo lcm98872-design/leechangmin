@@ -6,7 +6,7 @@
 // - 학점 용량 검사(남은 학기에 다 들을 수 있나)와 졸업요건 검사(요건이 채워지나)는 따로 본다.
 // - 빨간 오류가 없어도 "확인 필요" 항목은 따로 보여 준다. 자동 검사 통과 ≠ 졸업 확정.
 
-import { compareTerms, gradeOf, nextTerm, parseTerm, termLabel, termRange } from "./terms";
+import { compareTerms, nextTerm, parseTerm, termLabel, termRange } from "./terms";
 
 // ── 교육과정 데이터 ─────────────────────────────────────────
 export type MajorCategory = "전공공통" | "전공필수" | "전공선택";
@@ -74,6 +74,8 @@ export interface PlanState {
   completed: number[];     // 이수 완료
   inProgress: number[];    // 현재 학기 수강 중
   interests: number[];     // 듣고 싶은 교양
+  pastLeaves: number;      // 지금까지 휴학한 학기 수 (2~4학년이 입력)
+  leaveTerms: string[];    // 앞으로 휴학할 학기
   items: PlanItem[];       // 다음 학기부터의 계획
 }
 
@@ -105,10 +107,42 @@ export function slotTypesFor(c: AnyCourse): SlotType[] {
   return c.category === "균형교양" ? ["교양선택", "자유선택"] : [];
 }
 
-// ── 초안 생성 ──────────────────────────────────────────────
-export function plannedTerms(s: Pick<PlanState, "currentTerm" | "targetTerm">): string[] {
-  return termRange(nextTerm(s.currentTerm), s.targetTerm);
+// ── 학기·학년 ──────────────────────────────────────────────
+type TermInfo = Pick<PlanState, "admissionYear" | "currentTerm" | "targetTerm" | "pastLeaves" | "leaveTerms">;
+
+/** 입학 후 몇 번째로 "다니는" 학기인가. 휴학 학기면 null */
+export function semesterNo(s: TermInfo, term: string): number | null {
+  if (s.leaveTerms.includes(term)) return null;
+  const { year, sem } = parseTerm(term);
+  const elapsed = (year - s.admissionYear) * 2 + sem;
+  const futureLeaves = s.leaveTerms.filter((t) => compareTerms(t, s.currentTerm) > 0 && compareTerms(t, term) < 0).length;
+  return elapsed - s.pastLeaves - futureLeaves;
 }
+
+/** 학년 (휴학 학기면 0, 5 이상이면 초과학기) */
+export function gradeAt(s: TermInfo, term: string): number {
+  const n = semesterNo(s, term);
+  return n === null ? 0 : Math.max(1, Math.ceil(n / 2));
+}
+
+/** 4학년 2학기(8번째 다니는 학기)가 되는 학기. 휴학 예정 학기는 건너뛴다 */
+export function defaultTarget(s: Omit<TermInfo, "targetTerm">): string {
+  const now = semesterNo({ ...s, targetTerm: s.currentTerm }, s.currentTerm) ?? 0;
+  let need = Math.max(1, 8 - now);
+  let t = s.currentTerm;
+  for (let guard = 0; guard < 40 && need > 0; guard++) {
+    t = nextTerm(t);
+    if (!s.leaveTerms.includes(t)) need--;
+  }
+  return t;
+}
+
+/** 다음 학기부터 희망 졸업학기까지, 휴학 학기를 뺀 학기들 */
+export function plannedTerms(s: Pick<PlanState, "currentTerm" | "targetTerm" | "leaveTerms">): string[] {
+  return termRange(nextTerm(s.currentTerm), s.targetTerm).filter((t) => !s.leaveTerms.includes(t));
+}
+
+// ── 초안 생성 ──────────────────────────────────────────────
 
 export function generateDraft(s: PlanState, cur: Curriculum): PlanItem[] {
   const idx = courseIndex(cur);
@@ -132,7 +166,7 @@ export function generateDraft(s: PlanState, cur: Curriculum): PlanItem[] {
       if (room(t) < c.credits) return false;
       if (c.kind === "major") {
         if (strictSem && !c.semesters.includes(parseTerm(t).sem)) return false;
-        if (strictGrade && gradeOf(t, s.admissionYear) < c.year) return false;
+        if (strictGrade && gradeAt(s, t) < c.year) return false;
       }
       return true;
     };
@@ -143,6 +177,7 @@ export function generateDraft(s: PlanState, cur: Curriculum): PlanItem[] {
     // 희망 졸업학기 이후로 밀기
     let t = nextTerm(terms[terms.length - 1]);
     for (let i = 0; i < 12; i++, t = nextTerm(t)) {
+      if (s.leaveTerms.includes(t)) continue;
       ensureTerm(t);
       if (c.kind === "major" && !c.semesters.includes(parseTerm(t).sem)) continue;
       if (room(t) >= c.credits) return put(c, t);
@@ -251,6 +286,7 @@ export type Op =
   | { type: "addSlot"; slotType: SlotType; credits: number; term: string }
   | { type: "setTarget"; term: string }
   | { type: "setMax"; value: number }
+  | { type: "toggleLeave"; term: string }
   | { type: "regenerate" };
 
 export function applyOp(s: PlanState, op: Op, cur: Curriculum): PlanState {
@@ -288,6 +324,14 @@ export function applyOp(s: PlanState, op: Op, cur: Curriculum): PlanState {
       return { ...s, targetTerm: op.term };
     case "setMax":
       return { ...s, maxCredits: Math.max(3, Math.min(30, Math.round(op.value) || 3)) };
+    case "toggleLeave": {
+      if (s.leaveTerms.includes(op.term)) return { ...s, leaveTerms: s.leaveTerms.filter((t) => t !== op.term) };
+      // 휴학하는 학기의 과목은 다음에 다니는 학기로 민다
+      const leaveTerms = [...s.leaveTerms, op.term].sort(compareTerms);
+      let to = nextTerm(op.term);
+      while (leaveTerms.includes(to)) to = nextTerm(to);
+      return { ...s, leaveTerms, items: sortItems(s.items.map((i) => (i.term === op.term ? { ...i, term: to } : i)), idx) };
+    }
     case "regenerate":
       return { ...s, items: generateDraft({ ...s, items: [] }, cur) };
   }
@@ -312,7 +356,8 @@ export const barTotal = (b: Bar) => b.done + b.inProgress + b.planned;
 
 export interface TermView {
   key: string;
-  grade: number;
+  grade: number;           // 0이면 휴학
+  leave: boolean;
   afterTarget: boolean;
   items: PlanItem[];
   courseCredits: number;
@@ -356,14 +401,16 @@ export function evaluate(s: PlanState, cur: Curriculum): Evaluation {
   // 학기 보기
   const base = plannedTerms(s);
   const extra = s.items.map((i) => i.term).filter((t) => compareTerms(t, s.currentTerm) > 0 && !base.includes(t));
-  const keys = [...new Set([...base, ...extra])].sort(compareTerms);
+  const leaves = s.leaveTerms.filter((t) => compareTerms(t, s.currentTerm) > 0);
+  const keys = [...new Set([...base, ...extra, ...leaves])].sort(compareTerms);
   const terms: TermView[] = keys.map((key) => {
     const items = s.items.filter((i) => i.term === key);
     const courseCredits = items.reduce((a, i) => a + (i.courseId ? idx.get(i.courseId)?.credits ?? 0 : 0), 0);
     const slotCredits = items.reduce((a, i) => a + (i.slot?.credits ?? 0), 0);
     return {
       key,
-      grade: gradeOf(key, s.admissionYear),
+      grade: gradeAt(s, key),
+      leave: s.leaveTerms.includes(key),
       afterTarget: compareTerms(key, s.targetTerm) > 0,
       items,
       courseCredits,
@@ -371,6 +418,15 @@ export function evaluate(s: PlanState, cur: Curriculum): Evaluation {
       load: courseCredits + slotCredits,
     };
   });
+
+  const open = terms.filter((t) => !t.leave); // 다니는 학기만 (과목을 옮길 곳)
+
+  // 휴학 학기에 남은 과목
+  for (const t of terms.filter((x) => x.leave && x.items.length)) {
+    const dest = open.find((x) => compareTerms(x.key, t.key) > 0) ?? open[open.length - 1];
+    add("error", "leave_items", `${termLabel(t.key)}은(는) 휴학 학기인데 계획이 ${t.items.length}개 있어요.`,
+      dest ? t.items.map((i) => ({ label: `${i.slot ? `빈 칸 ${i.slot.credits}학점` : idx.get(i.courseId!)?.name} → ${termLabel(dest.key)}`, op: { type: "move", itemId: i.id, to: dest.key } as Op })) : []);
+  }
 
   // 학점 집계 (실제 과목만)
   const planned = s.items.filter((i) => i.courseId).map((i) => i.courseId!);
@@ -397,10 +453,10 @@ export function evaluate(s: PlanState, cur: Curriculum): Evaluation {
   }
 
   // 학기 학점 초과
-  for (const t of terms) {
+  for (const t of open) {
     if (t.load <= s.maxCredits) continue;
     const over = t.load - s.maxCredits;
-    const targets = terms.filter((x) => x.key !== t.key && !x.afterTarget && s.maxCredits - x.load > 0);
+    const targets = open.filter((x) => x.key !== t.key && !x.afterTarget && s.maxCredits - x.load > 0);
     const movable = t.items
       .filter((i) => i.courseId && !isRequiredMajor(idx.get(i.courseId)!))
       .concat(t.items.filter((i) => i.courseId && isRequiredMajor(idx.get(i.courseId)!)))
@@ -423,8 +479,8 @@ export function evaluate(s: PlanState, cur: Curriculum): Evaluation {
   const core = cur.major.courses.filter((c) => c.category !== "전공선택");
   const missingCore = core.filter((c) => !have.has(c.id));
   for (const c of missingCore) {
-    const dest = terms.find((x) => !x.afterTarget && s.maxCredits - x.load >= c.credits && c.semesters.includes(parseTerm(x.key).sem))
-      ?? terms.find((x) => !x.afterTarget && s.maxCredits - x.load >= c.credits);
+    const dest = open.find((x) => !x.afterTarget && s.maxCredits - x.load >= c.credits && c.semesters.includes(parseTerm(x.key).sem))
+      ?? open.find((x) => !x.afterTarget && s.maxCredits - x.load >= c.credits);
     add("error", "missing_required", `${c.category} ${c.name}이(가) 계획에 없어요.`,
       dest ? [{ label: `${termLabel(dest.key)}에 넣기`, op: { type: "add", courseId: c.id, term: dest.key } }] : []);
   }
@@ -435,7 +491,7 @@ export function evaluate(s: PlanState, cur: Curriculum): Evaluation {
   for (const gr of missingGroups) {
     const opts = cur.general.filter((g) => g.requiredGroup === gr);
     const pick = opts.find((g) => g.name.includes("자연기술")) ?? opts[0];
-    const dest = terms.find((x) => !x.afterTarget && s.maxCredits - x.load >= pick.credits);
+    const dest = open.find((x) => !x.afterTarget && s.maxCredits - x.load >= pick.credits);
     add("error", "missing_group", `필수교양 '${gr}'을(를) 아직 안 들었고 계획에도 없어요.`,
       dest ? [{ label: `${pick.name} → ${termLabel(dest.key)}`, op: { type: "add", courseId: pick.id, term: dest.key } }] : []);
   }
@@ -447,7 +503,8 @@ export function evaluate(s: PlanState, cur: Curriculum): Evaluation {
   const capacity = { terms: remainingTerms, available, needed, ok: available >= needed };
   if (!capacity.ok) {
     const short = needed - available;
-    const later = nextTerm(s.targetTerm);
+    let later = nextTerm(s.targetTerm);
+    while (s.leaveTerms.includes(later)) later = nextTerm(later);
     const raise = Math.min(30, Math.ceil(needed / Math.max(1, remainingTerms)));
     add("error", "capacity",
       `${termLabel(s.targetTerm)}까지 남은 ${remainingTerms}학기 × ${s.maxCredits}학점 = ${available}학점이라, 남은 ${needed}학점보다 ${short}학점 부족해요.`,
@@ -476,7 +533,7 @@ export function evaluate(s: PlanState, cur: Curriculum): Evaluation {
     if (covering >= short) {
       add("todo", `short_${name}`, `${name} ${short}학점이 더 필요해요. 빈 칸에 과목을 골라 채우세요.`);
     } else {
-      const dest = terms.find((x) => !x.afterTarget && s.maxCredits - x.load > 0);
+      const dest = open.find((x) => !x.afterTarget && s.maxCredits - x.load > 0);
       const gap = short - covering;
       add("error", `short_${name}`, `${name} ${short}학점이 더 필요한데 빈 칸이 ${covering}학점뿐이에요 (${gap}학점 부족).${capacity.ok ? "" : " 학점 용량을 먼저 늘린 뒤 빈 칸을 추가하세요."}`,
         dest ? [{ label: `${termLabel(dest.key)}에 ${slotType} 빈 칸 ${Math.min(gap, s.maxCredits - dest.load)}학점 추가`, op: { type: "addSlot", slotType, credits: Math.min(gap, s.maxCredits - dest.load), term: dest.key } }] : []);
@@ -503,11 +560,11 @@ export function evaluate(s: PlanState, cur: Curriculum): Evaluation {
       const c = i.courseId ? idx.get(i.courseId) : undefined;
       if (!c || c.kind !== "major") continue;
       if (!semOk(c, t.key)) {
-        const dest = terms.find((x) => x.key !== t.key && !x.afterTarget && semOk(c, x.key) && s.maxCredits - x.load >= c.credits);
+        const dest = open.find((x) => x.key !== t.key && !x.afterTarget && semOk(c, x.key) && s.maxCredits - x.load >= c.credits);
         add("warn", "semester", `${c.name}은(는) 교육과정표상 ${c.semesters.join("·")}학기 과목인데 ${termLabel(t.key)}에 있어요.`,
           dest ? [{ label: `${termLabel(dest.key)}로 옮기기`, op: { type: "move", itemId: i.id, to: dest.key } }] : []);
       }
-      if (t.grade < c.year) add("warn", "early", `${c.name}은(는) ${c.year}학년 권장 과목인데 ${t.grade}학년에 있어요.`);
+      if (!t.leave && t.grade < c.year) add("warn", "early", `${c.name}은(는) ${c.year}학년 권장 과목인데 ${t.grade}학년에 있어요.`);
     }
   }
 
