@@ -38,7 +38,7 @@ export function validateState(v: unknown): PlanState | null {
   if (!ids(s.completed, 200) || !ids(s.inProgress, 60) || !ids(s.interests, 100)) return null;
   const pastLeaves = s.pastLeaves ?? 0;
   const leaveTerms = s.leaveTerms ?? [];
-  if (!int(pastLeaves, 0, 20) || !Array.isArray(leaveTerms) || leaveTerms.length > 20 || !leaveTerms.every(isTermKey)) return null;
+  if (!int(pastLeaves, -8, 20) || !Array.isArray(leaveTerms) || leaveTerms.length > 20 || !leaveTerms.every(isTermKey)) return null;
   if (!Array.isArray(s.items) || s.items.length > 200) return null;
   const items: PlanItem[] = [];
   for (const raw of s.items as unknown[]) {

@@ -49,11 +49,10 @@ export default function Workbench({ code, initial, savedAt, curriculum: cur }: {
     });
   };
 
-  const counts = (lv: Issue["level"]) => ev.issues.filter((i) => i.level === lv).length;
   const targetOptions = termRange(nextTerm(state.currentTerm), termKey(parseTerm(state.currentTerm).year + 8, 2));
 
   return (
-    <main className="mx-auto max-w-[96rem] px-4 py-6">
+    <main className="mx-auto w-full max-w-[96rem] min-w-0 overflow-x-hidden px-4 py-6">
       {/* ── 상단: 상태와 저장 ── */}
       <header className="flex flex-wrap items-center gap-3">
         <Link href="/" className="text-sm text-zinc-500 hover:underline">← 처음</Link>
@@ -95,7 +94,18 @@ export default function Workbench({ code, initial, savedAt, curriculum: cur }: {
           <input type="number" min={3} max={30} className="w-16 rounded border border-zinc-300 bg-transparent px-2 py-1 dark:border-zinc-700" value={state.maxCredits}
             onChange={(e) => run({ type: "setMax", value: Number(e.target.value) }, `학기당 최대 학점 → ${e.target.value}`)} />학점
         </label>
-        <span className="text-zinc-500">남은 학기 {ev.diag.capacity.terms}개 · 들을 수 있는 최대 {ev.diag.capacity.available}학점</span>
+        <label className="flex items-center gap-2">지금
+          <select className="rounded border border-zinc-300 bg-transparent px-2 py-1 dark:border-zinc-700" value={ev.diag.now.semester}
+            onChange={(e) => {
+              const n = Number(e.target.value);
+              const elapsed = (parseTerm(state.currentTerm).year - state.admissionYear) * 2 + parseTerm(state.currentTerm).sem;
+              run({ type: "setPastLeaves", value: elapsed - n }, `지금 학년 → ${Math.ceil(n / 2)}학년 ${n % 2 === 0 ? 2 : 1}학기`);
+            }}>
+            {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+              <option key={n} value={n}>{n > 8 ? `초과학기 (${n}번째)` : `${Math.ceil(n / 2)}학년 ${n % 2 === 0 ? 2 : 1}학기`}</option>
+            ))}
+          </select>
+        </label>
         <button className="ml-auto text-zinc-600 underline dark:text-zinc-400"
           onClick={() => { if (confirm("지금 계획을 지우고 조건에 맞춰 초안을 다시 만들까요?")) run({ type: "regenerate" }, "초안을 다시 만들었어요"); }}>
           초안 다시 만들기
@@ -111,69 +121,50 @@ export default function Workbench({ code, initial, savedAt, curriculum: cur }: {
         </div>
       )}
 
-      <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
-        <div className="min-w-0 space-y-4">
-          {/* ── 학기별 계획 ── */}
-          <section className="flex gap-3 overflow-x-auto pb-2">
-            <CurrentTermColumn state={state} idx={idx} />
-            {ev.terms.map((t) => (
-              <div key={t.key} className={`flex w-60 shrink-0 flex-col rounded-xl border p-3 ${t.leave ? "border-dashed border-amber-400 bg-amber-50/50 dark:bg-amber-950/20" : t.load > state.maxCredits ? "border-red-400" : t.afterTarget ? "border-dashed border-orange-400" : "border-zinc-200 dark:border-zinc-800"}`}>
-                <div className="flex items-baseline justify-between">
-                  <h3 className="font-semibold">{termLabel(t.key)}</h3>
-                  <span className="text-xs text-zinc-500">{t.leave ? "휴학" : t.afterTarget ? "졸업학기 이후" : t.grade > 4 ? "초과학기" : `${t.grade}학년`}</span>
-                </div>
-                <div className="mt-1 text-right">
-                  <button onClick={() => run({ type: "toggleLeave", term: t.key }, t.leave ? `${termLabel(t.key)} 휴학 취소` : `${termLabel(t.key)} 휴학`)}
-                    className="text-xs text-amber-700 hover:underline dark:text-amber-400">
-                    {t.leave ? "휴학 취소" : "이 학기 휴학"}
-                  </button>
-                </div>
-                <ul className="mt-2 flex-1 space-y-1.5">
-                  {t.items.map((i) => (
-                    <ItemCard key={i.id} item={i} idx={idx} terms={ev.terms.filter((x) => !x.leave).map((x) => x.key)} term={t.key}
-                      onMove={(to) => run({ type: "move", itemId: i.id, to }, `${itemName(i, idx)} → ${termLabel(to)}`)}
-                      onRemove={() => run({ type: "remove", itemId: i.id }, `${itemName(i, idx)} 뺌`)}
-                      onFill={() => setPicker({ term: t.key, slotItemId: i.id, slotType: i.slot?.type })} />
-                  ))}
-                </ul>
-                {!t.leave && <button onClick={() => setPicker({ term: t.key })} className="mt-2 rounded-lg border border-dashed border-zinc-300 py-1 text-xs text-zinc-500 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-900">+ 과목 추가</button>}
-                <div className={`mt-2 flex justify-between border-t border-zinc-200 pt-2 text-sm dark:border-zinc-800 ${t.load > state.maxCredits ? "font-semibold text-red-600" : ""}`}>
-                  <span>계획 학점</span>
-                  <span>{t.load} / {state.maxCredits}{t.slotCredits > 0 && <span className="ml-1 text-xs text-zinc-500">(빈 칸 {t.slotCredits})</span>}</span>
-                </div>
-              </div>
-            ))}
-          </section>
+      {/* ── 한눈에 보는 졸업요건 ── */}
+      <SummaryTiles ev={ev} />
 
-          {/* ── 문제와 고치는 방법 ── */}
-          <section>
-            <h2 className="font-semibold">
-              검사 결과 <span className="text-sm font-normal text-zinc-500">오류 {counts("error")} · 할 일 {counts("todo")} · 참고 {counts("warn")} · 확인 필요 {counts("confirm")}</span>
-            </h2>
-            {ev.status === "자동 검사 통과" && (
-              <p className="mt-2 rounded-lg bg-teal-50 p-3 text-sm text-teal-900 dark:bg-teal-950/40 dark:text-teal-100">
-                ✅ 자동으로 검사할 수 있는 조건은 모두 통과했어요. 아래 &lsquo;확인 필요&rsquo; 항목은 직접 확인해 주세요. 졸업을 보장하는 결과는 아니에요.
-              </p>
-            )}
-            <ul className="mt-2 space-y-2">
-              {ev.issues.map((iss, n) => (
-                <li key={`${iss.code}-${n}`} className={`rounded-lg border px-3 py-2 text-sm ${LEVEL[iss.level].box}`}>
-                  <span className="mr-1">{LEVEL[iss.level].icon}</span>{iss.message}
-                  {iss.actions.length > 0 && (
-                    <span className="mt-1 flex flex-wrap gap-2">
-                      {iss.actions.map((a) => (
-                        <button key={a.label} onClick={() => run(a.op, a.label)} className="rounded border border-current px-2 py-0.5 text-xs hover:bg-white/60 dark:hover:bg-black/30">{a.label}</button>
-                      ))}
-                    </span>
-                  )}
-                </li>
+      {/* ── 다음에 할 일 ── */}
+      <NextStep ev={ev} onRun={run} onFillSlot={(type) => {
+        const types: SlotType[] = type ? [type, "자유선택"] : ["교양선택", "전공선택", "자유선택"];
+        const slot = types.map((t) => state.items.find((i) => i.slot?.type === t)).find(Boolean);
+        if (slot) setPicker({ term: slot.term, slotItemId: slot.id, slotType: slot.slot!.type });
+      }} />
+
+      {/* ── 학기별 계획 ── */}
+      <section className="mt-4 flex gap-3 overflow-x-auto pb-2">
+        <CurrentTermColumn state={state} idx={idx} grade={ev.diag.now.grade} />
+        {ev.terms.map((t) => (
+          <div key={t.key} className={`flex w-60 shrink-0 flex-col rounded-xl border p-3 ${t.leave ? "border-dashed border-amber-400 bg-amber-50/50 dark:bg-amber-950/20" : t.load > state.maxCredits ? "border-2 border-red-500" : t.afterTarget ? "border-dashed border-orange-400" : "border-zinc-200 dark:border-zinc-800"}`}>
+            <div className="flex items-baseline justify-between">
+              <h3 className="font-semibold">{termLabel(t.key)}</h3>
+              <span className="text-xs text-zinc-500">{t.leave ? "휴학" : t.afterTarget ? "졸업학기 이후" : t.grade > 4 ? "초과학기" : `${t.grade}학년`}</span>
+            </div>
+            <div className="mt-1 text-right">
+              <button onClick={() => run({ type: "toggleLeave", term: t.key }, t.leave ? `${termLabel(t.key)} 휴학 취소` : `${termLabel(t.key)} 휴학`)}
+                className="text-xs text-amber-700 hover:underline dark:text-amber-400">
+                {t.leave ? "휴학 취소" : "이 학기 휴학"}
+              </button>
+            </div>
+            <ul className="mt-2 flex-1 space-y-1.5">
+              {t.items.map((i) => (
+                <ItemCard key={i.id} item={i} idx={idx} terms={ev.terms.filter((x) => !x.leave).map((x) => x.key)} term={t.key}
+                  onMove={(to) => run({ type: "move", itemId: i.id, to }, `${itemName(i, idx)} → ${termLabel(to)}`)}
+                  onRemove={() => run({ type: "remove", itemId: i.id }, `${itemName(i, idx)} 뺌`)}
+                  onFill={() => setPicker({ term: t.key, slotItemId: i.id, slotType: i.slot?.type })} />
               ))}
             </ul>
-          </section>
-        </div>
+            {!t.leave && <button onClick={() => setPicker({ term: t.key })} className="mt-2 rounded-lg border border-dashed border-zinc-300 py-1 text-xs text-zinc-500 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-900">+ 과목 추가</button>}
+            <div className={`mt-2 flex justify-between border-t border-zinc-200 pt-2 text-sm dark:border-zinc-800 ${t.load > state.maxCredits ? "font-semibold text-red-600" : ""}`}>
+              <span>계획 학점</span>
+              <span>{t.load} / {state.maxCredits}{t.slotCredits > 0 && <span className="ml-1 text-xs text-zinc-500">(빈 칸 {t.slotCredits})</span>}</span>
+            </div>
+          </div>
+        ))}
+      </section>
 
-        <Diagnosis ev={ev} />
-      </div>
+      {/* ── 전체 검사 결과 ── */}
+      <IssueList ev={ev} onRun={run} />
 
       {picker && (
         <CoursePicker
@@ -218,13 +209,13 @@ function describeChange(a: Evaluation, b: Evaluation): string[] {
 const itemName = (i: PlanItem, idx: Map<number, AnyCourse>) =>
   i.slot ? `${i.slot.type} 빈 칸 ${i.slot.credits}학점` : idx.get(i.courseId!)?.name ?? "과목";
 
-function CurrentTermColumn({ state, idx }: { state: PlanState; idx: Map<number, AnyCourse> }) {
+function CurrentTermColumn({ state, idx, grade }: { state: PlanState; idx: Map<number, AnyCourse>; grade: number }) {
   const list = state.inProgress.map((id) => idx.get(id)).filter(Boolean) as AnyCourse[];
   return (
     <div className="flex w-52 shrink-0 flex-col rounded-xl border border-sky-200 bg-sky-50/50 p-3 dark:border-sky-900 dark:bg-sky-950/20">
       <div className="flex items-baseline justify-between">
         <h3 className="font-semibold">{termLabel(state.currentTerm)}</h3>
-        <span className="text-xs text-sky-700 dark:text-sky-300">지금 · 수강 중</span>
+        <span className="text-xs text-sky-700 dark:text-sky-300">지금 · {grade > 4 ? "초과학기" : `${grade}학년`}</span>
       </div>
       <ul className="mt-2 flex-1 space-y-1 text-sm">
         {list.length === 0 && <li className="text-xs text-zinc-500">수강 중으로 표시한 과목이 없어요</li>}
@@ -271,62 +262,161 @@ function ItemCard({ item, idx, terms, term, onMove, onRemove, onFill }: {
   );
 }
 
-function BarRow({ name, bar, unit = "학점" }: { name: string; bar: Bar; unit?: string }) {
+function Seg({ bar }: { bar: Bar }) {
   const pct = (n: number) => `${Math.min(100, (n / Math.max(1, bar.required)) * 100)}%`;
-  const total = barTotal(bar);
   return (
-    <div>
-      <div className="flex justify-between text-sm">
-        <span>{name}</span>
-        <span className={total >= bar.required ? "text-teal-700 dark:text-teal-400" : ""}>{total} / {bar.required}{unit}</span>
-      </div>
-      <div className="mt-1 flex h-2 overflow-hidden rounded bg-zinc-100 dark:bg-zinc-800">
-        <div className="bg-teal-700" style={{ width: pct(bar.done) }} />
-        <div className="bg-sky-400" style={{ width: pct(bar.inProgress) }} />
-        <div className="bg-teal-300 dark:bg-teal-800" style={{ width: pct(bar.planned) }} />
-      </div>
-      <p className="mt-0.5 text-xs text-zinc-500">이수 {bar.done} · 수강 중 {bar.inProgress} · 계획 {bar.planned}</p>
+    <div className="mt-2 flex h-2 overflow-hidden rounded bg-zinc-200 dark:bg-zinc-800">
+      <div className="bg-teal-700" style={{ width: pct(bar.done) }} />
+      <div className="bg-sky-400" style={{ width: pct(bar.inProgress) }} />
+      <div className="bg-teal-300 dark:bg-teal-600" style={{ width: pct(bar.planned) }} />
     </div>
   );
 }
 
-function Check({ ok, children }: { ok: boolean; children: React.ReactNode }) {
-  return <li className="flex justify-between text-sm"><span>{children}</span><span>{ok ? "✅" : "⬜"}</span></li>;
-}
+type Tone = "ok" | "todo" | "error";
+const TONE: Record<Tone, string> = {
+  ok: "border-teal-600 dark:border-teal-500",
+  todo: "border-orange-400",
+  error: "border-red-500",
+};
+const TONE_TEXT: Record<Tone, string> = {
+  ok: "text-teal-700 dark:text-teal-400",
+  todo: "text-orange-600 dark:text-orange-400",
+  error: "text-red-600 dark:text-red-400",
+};
 
-function Diagnosis({ ev }: { ev: Evaluation }) {
+function SummaryTiles({ ev }: { ev: Evaluation }) {
   const d = ev.diag;
+  const has = (code: string) => ev.issues.find((i) => i.code === code)?.level;
+  const creditTile = (name: string, bar: Bar, code: string) => {
+    const left = bar.required - barTotal(bar);
+    const tone: Tone = left <= 0 ? "ok" : has(code) === "error" ? "error" : "todo";
+    return { name, bar, left, tone };
+  };
+  const tiles = [creditTile("졸업 학점", d.total, "short_졸업"), creditTile("전공", d.major, "short_전공"), creditTile("교양", d.general, "short_교양")];
+  const conds = [
+    { name: "전공공통·필수", ok: d.coreCourses.satisfied === d.coreCourses.total, text: `${d.coreCourses.satisfied}/${d.coreCourses.total}과목`, miss: d.coreCourses.missing.map((c) => c.name) },
+    { name: "필수교양", ok: d.generalGroups.satisfied === d.generalGroups.total, text: `${d.generalGroups.satisfied}/${d.generalGroups.total}그룹`, miss: d.generalGroups.missing },
+    { name: "교양 영역", ok: d.areas.every((a) => a.ok), text: `${d.areas.filter((a) => a.ok).length}/${d.areas.length}`, miss: d.areas.filter((a) => !a.ok).map((a) => a.name) },
+    { name: "핵심역량", ok: d.competencies.every((a) => a.ok), text: `${d.competencies.filter((a) => a.ok).length}/${d.competencies.length}`, miss: d.competencies.filter((a) => !a.ok).map((a) => a.name) },
+  ];
+  const condTone: Tone = conds.every((c) => c.ok) ? "ok" : d.coreCourses.missing.length || d.generalGroups.missing.length ? "error" : "todo";
+  const capTone: Tone = d.capacity.ok ? "ok" : "error";
+  const slots = d.slots.전공선택 + d.slots.교양선택 + d.slots.자유선택;
+
   return (
-    <aside className="h-fit space-y-4 rounded-xl border border-zinc-200 p-4 xl:sticky xl:top-4 dark:border-zinc-800">
-      <h2 className="font-semibold">졸업요건 진단</h2>
-      <p className="text-xs text-zinc-500">실제 과목만 셉니다. 빈 칸은 과목을 고르면 반영돼요.</p>
-      <BarRow name="졸업 학점" bar={d.total} />
-      <BarRow name="전공 (일반 45 + 심화 36)" bar={d.major} />
-      <BarRow name="교양" bar={d.general} />
-      <ul className="space-y-1 border-t border-zinc-200 pt-3 dark:border-zinc-800">
-        <Check ok={d.coreCourses.satisfied === d.coreCourses.total}>전공공통·필수 {d.coreCourses.satisfied}/{d.coreCourses.total}과목</Check>
-        <Check ok={d.generalGroups.satisfied === d.generalGroups.total}>필수교양 {d.generalGroups.satisfied}/{d.generalGroups.total}그룹</Check>
-        <Check ok={d.areas.every((a) => a.ok)}>균형교양 영역 {d.areas.filter((a) => a.ok).length}/{AREAS.length}</Check>
-        <Check ok={d.competencies.every((a) => a.ok)}>핵심역량 {d.competencies.filter((a) => a.ok).length}/{d.competencies.length}</Check>
-      </ul>
-      <div className="border-t border-zinc-200 pt-3 text-sm dark:border-zinc-800">
-        <p className="font-medium">학점 용량 <span className="text-xs font-normal text-zinc-500">(요건 충족과 별개)</span></p>
-        <p className={d.capacity.ok ? "text-teal-700 dark:text-teal-400" : "text-red-600"}>
-          남은 {d.capacity.terms}학기에 최대 {d.capacity.available}학점 · 필요 {d.capacity.needed}학점 {d.capacity.ok ? "✅" : "❌"}
-        </p>
-      </div>
-      {(d.slots.전공선택 + d.slots.교양선택 + d.slots.자유선택) > 0 && (
-        <div className="border-t border-zinc-200 pt-3 text-sm dark:border-zinc-800">
-          <p className="font-medium">아직 고르지 않은 빈 칸</p>
-          {(["전공선택", "교양선택", "자유선택"] as SlotType[]).filter((t) => d.slots[t] > 0).map((t) => <p key={t}>{t} {d.slots[t]}학점</p>)}
+    <section className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
+      {tiles.map((t) => (
+        <div key={t.name} className={`min-w-0 rounded-xl border-2 p-3 ${TONE[t.tone]}`}>
+          <p className="text-sm text-zinc-600 dark:text-zinc-400">{t.name}</p>
+          <p className={`text-2xl font-bold ${TONE_TEXT[t.tone]}`}>{t.left <= 0 ? "충족 ✓" : `${t.left}학점 남음`}</p>
+          <Seg bar={t.bar} />
+          <p className="mt-1 text-xs text-zinc-500">{barTotal(t.bar)} / {t.bar.required} (이수 {t.bar.done} · 수강 중 {t.bar.inProgress} · 계획 {t.bar.planned})</p>
         </div>
-      )}
-      <div className="flex gap-3 text-xs text-zinc-500">
+      ))}
+      <div className={`min-w-0 rounded-xl border-2 p-3 ${TONE[condTone]}`}>
+        <p className="text-sm text-zinc-600 dark:text-zinc-400">필수 조건</p>
+        <ul className="mt-1 space-y-0.5 text-sm">
+          {conds.map((c) => (
+            <li key={c.name} className="flex justify-between gap-2" title={c.miss.join(", ")}>
+              <span>{c.name}</span>
+              <span className={c.ok ? TONE_TEXT.ok : TONE_TEXT.todo}>{c.ok ? "✓" : "✗"} {c.text}</span>
+            </li>
+          ))}
+        </ul>
+        {conds.some((c) => !c.ok) && (
+          <p className="mt-1 truncate text-xs text-orange-600 dark:text-orange-400" title={conds.flatMap((c) => c.miss).join(", ")}>
+            부족: {conds.flatMap((c) => c.miss).join(", ")}
+          </p>
+        )}
+      </div>
+      <div className={`col-span-2 min-w-0 rounded-xl border-2 p-3 lg:col-span-1 ${TONE[capTone]}`}>
+        <p className="text-sm text-zinc-600 dark:text-zinc-400">학점 용량 <span className="text-xs">(요건과 별개)</span></p>
+        <p className={`text-2xl font-bold ${TONE_TEXT[capTone]}`}>{d.capacity.ok ? "충분 ✓" : `${d.capacity.needed - d.capacity.available}학점 모자람`}</p>
+        <p className="mt-1 text-xs text-zinc-500">남은 {d.capacity.terms}학기 × 최대 학점 = {d.capacity.available} / 필요 {d.capacity.needed}</p>
+        {slots > 0 && <p className="mt-1 text-xs text-zinc-500">고를 빈 칸: {(["전공선택", "교양선택", "자유선택"] as SlotType[]).filter((k) => d.slots[k] > 0).map((k) => `${k} ${d.slots[k]}`).join(" · ")}</p>}
+      </div>
+      <p className="col-span-2 flex gap-3 text-xs text-zinc-500 lg:col-span-5">
         <span><span className="inline-block h-2 w-2 bg-teal-700" /> 이수</span>
         <span><span className="inline-block h-2 w-2 bg-sky-400" /> 수강 중</span>
         <span><span className="inline-block h-2 w-2 bg-teal-300" /> 계획</span>
+        <span>· 빈 칸은 과목을 고르면 반영돼요</span>
+      </p>
+    </section>
+  );
+}
+
+function NextStep({ ev, onRun, onFillSlot }: {
+  ev: Evaluation; onRun: (op: Op, what: string) => void; onFillSlot: (type?: SlotType) => void;
+}) {
+  // 학년이 틀리면 다른 결과가 모두 틀어지므로 가장 먼저 보여 준다
+  const first = ev.issues.find((i) => i.code === "grade_mismatch")
+    ?? ev.issues.find((i) => i.level === "error") ?? ev.issues.find((i) => i.level === "todo");
+  const confirms = ev.issues.filter((i) => i.level === "confirm").length;
+  if (!first) {
+    return (
+      <div className="mt-3 rounded-xl bg-teal-700 px-4 py-3 text-white">
+        <p className="font-semibold">✅ 자동으로 검사할 수 있는 조건은 모두 통과했어요</p>
+        <p className="text-sm text-teal-100">아래 &lsquo;확인 필요&rsquo; {confirms}건은 직접 확인해 주세요. 졸업을 보장하는 결과는 아니에요.</p>
       </div>
-    </aside>
+    );
+  }
+  const err = first.level === "error";
+  return (
+    <div className={`mt-3 flex flex-wrap items-center gap-3 rounded-xl px-4 py-3 ${err ? "bg-red-600 text-white" : "bg-orange-500 text-white"}`}>
+      <span className="rounded bg-white/20 px-2 py-0.5 text-xs font-semibold">다음에 할 일</span>
+      <p className="flex-1 font-medium">{first.message}</p>
+      {first.actions.map((a) => (
+        <button key={a.label} onClick={() => onRun(a.op, a.label)} className="rounded-lg bg-white px-3 py-1 text-sm font-medium text-zinc-900 hover:bg-zinc-100">{a.label}</button>
+      ))}
+      {first.level === "todo" && first.actions.length === 0 && (
+        <button onClick={() => onFillSlot(first.code === "short_전공" ? "전공선택" : first.code === "short_졸업" ? undefined : "교양선택")}
+          className="rounded-lg bg-white px-3 py-1 text-sm font-medium text-zinc-900 hover:bg-zinc-100">빈 칸 채우기</button>
+      )}
+    </div>
+  );
+}
+
+function IssueList({ ev, onRun }: { ev: Evaluation; onRun: (op: Op, what: string) => void }) {
+  const groups: { level: Issue["level"]; title: string }[] = [
+    { level: "error", title: "고쳐야 할 것" },
+    { level: "todo", title: "아직 채워야 할 것" },
+    { level: "warn", title: "참고" },
+  ];
+  const confirms = ev.issues.filter((i) => i.level === "confirm");
+  return (
+    <section className="mt-4 rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
+      <h2 className="font-semibold">전체 검사 결과</h2>
+      <div className="mt-2 grid gap-4 md:grid-cols-3">
+        {groups.map((g) => {
+          const list = ev.issues.filter((i) => i.level === g.level);
+          return (
+            <div key={g.level}>
+              <h3 className="text-sm font-medium">{LEVEL[g.level].icon} {g.title} <span className="text-zinc-500">{list.length}</span></h3>
+              {list.length === 0 && <p className="mt-1 text-sm text-zinc-500">없음</p>}
+              <ul className="mt-1 divide-y divide-zinc-200 dark:divide-zinc-800">
+                {list.map((iss, n) => (
+                  <li key={`${iss.code}-${n}`} className="py-1.5 text-sm">
+                    {iss.message}
+                    {iss.actions.length > 0 && (
+                      <span className="mt-1 flex flex-wrap gap-1.5">
+                        {iss.actions.map((a) => (
+                          <button key={a.label} onClick={() => onRun(a.op, a.label)} className="rounded border border-zinc-300 px-2 py-0.5 text-xs hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800">{a.label}</button>
+                        ))}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          );
+        })}
+      </div>
+      <details className="mt-3 text-sm text-zinc-600 dark:text-zinc-400">
+        <summary className="cursor-pointer">{LEVEL.confirm.icon} 확인 필요 {confirms.length}건 (자동으로 판정하지 않는 것)</summary>
+        <ul className="mt-1 list-disc pl-5">{confirms.map((c) => <li key={c.code}>{c.message}</li>)}</ul>
+      </details>
+    </section>
   );
 }
 
