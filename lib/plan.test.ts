@@ -259,3 +259,21 @@ describe("휴학", () => {
     expect(fixed.items.find((i) => i.id === item.id)!.term).not.toBe("2027-1");
   });
 });
+
+describe("학년 확인", () => {
+  it("들은 학점에 비해 학년이 낮으면 알려 주고, 고치기 버튼으로 학년을 바꾼다", () => {
+    const many = [...majorCourses.filter((c) => c.year <= 3).map((c) => c.id), ...FIRST_SEM]; // 약 80학점 이상
+    const s = freshman({ completed: many });
+    const ev = evaluate(s, cur);
+    const iss = ev.issues.find((i) => i.code === "grade_mismatch")!;
+    expect(iss).toBeDefined();
+    const fixed = applyOp(s, iss.actions[0].op, cur);
+    const ev2 = evaluate(fixed, cur);
+    expect(ev2.diag.now.grade).toBeGreaterThan(ev.diag.now.grade);
+    expect(ev2.issues.some((i) => i.code === "grade_mismatch")).toBe(false);
+  });
+
+  it("평범한 1학년은 학년 경고가 없다", () => {
+    expect(evaluate(freshman(), cur).issues.some((i) => i.code === "grade_mismatch")).toBe(false);
+  });
+});

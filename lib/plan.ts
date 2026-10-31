@@ -287,6 +287,7 @@ export type Op =
   | { type: "setTarget"; term: string }
   | { type: "setMax"; value: number }
   | { type: "toggleLeave"; term: string }
+  | { type: "setPastLeaves"; value: number; regenerate?: boolean }
   | { type: "regenerate" };
 
 export function applyOp(s: PlanState, op: Op, cur: Curriculum): PlanState {
@@ -331,6 +332,13 @@ export function applyOp(s: PlanState, op: Op, cur: Curriculum): PlanState {
       let to = nextTerm(op.term);
       while (leaveTerms.includes(to)) to = nextTerm(to);
       return { ...s, leaveTerms, items: sortItems(s.items.map((i) => (i.term === op.term ? { ...i, term: to } : i)), idx) };
+    }
+    case "setPastLeaves": {
+      const next = { ...s, pastLeaves: Math.max(-8, Math.min(20, Math.round(op.value))) };
+      if (!op.regenerate) return next;
+      // 학년을 고치면 희망 졸업학기도 4학년 2학기 기준으로 다시 잡고 초안을 다시 만든다
+      const retargeted = { ...next, targetTerm: defaultTarget(next) };
+      return { ...retargeted, items: generateDraft({ ...retargeted, items: [] }, cur) };
     }
     case "regenerate":
       return { ...s, items: generateDraft({ ...s, items: [] }, cur) };
@@ -386,6 +394,7 @@ export interface Evaluation {
     competencies: { name: string; ok: boolean }[];
     slots: Record<SlotType, number>;
     capacity: { terms: number; available: number; needed: number; ok: boolean };
+    now: { semester: number; grade: number }; // 지금 몇 번째 학기 · 몇 학년
   };
   issues: Issue[];
   status: "작성 중" | "자동 검사 통과";
@@ -568,6 +577,17 @@ export function evaluate(s: PlanState, cur: Curriculum): Evaluation {
     }
   }
 
+  // 들은 학점에 비해 학년이 너무 낮으면 입학년도·휴학 입력이 틀렸을 가능성이 크다
+  const nowSem = semesterNo(s, s.currentTerm) ?? 1;
+  const earned = total.done + total.inProgress;
+  if (earned > nowSem * 21 + 3) {
+    const est = Math.min(8, Math.max(nowSem + 1, Math.ceil(earned / 18)));
+    const elapsed = (parseTerm(s.currentTerm).year - s.admissionYear) * 2 + parseTerm(s.currentTerm).sem;
+    add("todo", "grade_mismatch",
+      `이수·수강 학점이 ${earned}학점인데 지금 ${gradeAt(s, s.currentTerm)}학년으로 계산돼 있어요. 학년이 틀리면 과목 배치가 틀어져요.`,
+      [{ label: `지금 ${Math.ceil(est / 2)}학년 ${est % 2 === 0 ? 2 : 1}학기로 고치고 초안 다시 만들기`, op: { type: "setPastLeaves", value: elapsed - est, regenerate: true } }]);
+  }
+
   // 확인 필요 (자동으로 판정하지 않는 것)
   if (s.admissionYear !== cur.year) {
     add("confirm", "curriculum_year", `${cur.year}학년도 교육과정 기준으로 계산했어요. ${s.admissionYear}학번 교육과정과 다를 수 있으니 학과에서 확인하세요.`);
@@ -585,6 +605,7 @@ export function evaluate(s: PlanState, cur: Curriculum): Evaluation {
       coreCourses: { total: core.length, satisfied: core.length - missingCore.length, missing: missingCore },
       generalGroups: { total: groups.length, satisfied: groups.length - missingGroups.length, missing: missingGroups },
       areas, competencies, slots, capacity,
+      now: { semester: nowSem, grade: gradeAt(s, s.currentTerm) },
     },
     issues,
     status,
