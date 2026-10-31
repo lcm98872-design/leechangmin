@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  applyOp, barTotal, courseIndex, evaluate, generateDraft,
+  applyOp, barTotal, courseIndex, defaultTarget, evaluate, generateDraft, gradeAt,
   type Curriculum, type GeneralCourse, type MajorCourse, type PlanState,
 } from "./plan";
 
@@ -47,7 +47,7 @@ const SECOND_SEM = [...["프론티어리더십", "부경인성세미나"].map((n
 const freshman = (over: Partial<PlanState> = {}): PlanState => {
   const s: PlanState = {
     majorId: 1, admissionYear: 2026, currentTerm: "2026-2", targetTerm: "2029-2", maxCredits: 18,
-    completed: FIRST_SEM, inProgress: SECOND_SEM, interests: [],
+    completed: FIRST_SEM, inProgress: SECOND_SEM, interests: [], pastLeaves: 0, leaveTerms: [],
     items: [], ...over,
   };
   return { ...s, items: generateDraft(s, cur) };
@@ -209,5 +209,53 @@ describe("진단과 검사", () => {
     expect(ev.issues.filter((i) => i.level === "error" || i.level === "todo")).toEqual([]);
     expect(ev.status).toBe("자동 검사 통과");
     expect(ev.issues.some((i) => i.level === "confirm")).toBe(true);
+  });
+});
+
+describe("휴학", () => {
+  it("지난 휴학 학기 수를 빼고 학년을 계산한다 (2022학번 + 휴학 4학기 → 지금 3학년)", () => {
+    const s = { admissionYear: 2022, currentTerm: "2026-2", targetTerm: "2027-2", pastLeaves: 4, leaveTerms: [] };
+    expect(gradeAt(s, "2026-2")).toBe(3);
+    expect(gradeAt(s, "2027-1")).toBe(4);
+    expect(defaultTarget(s)).toBe("2027-2");
+    expect(gradeAt({ ...s, pastLeaves: 0 }, "2026-2")).toBe(5); // 휴학 없으면 초과학기
+  });
+
+  it("휴학 예정 학기는 기본 졸업학기를 늦추고, 그 뒤 학년이 한 학기씩 밀린다", () => {
+    const s = { admissionYear: 2026, currentTerm: "2026-2", pastLeaves: 0, leaveTerms: ["2027-1", "2027-2"] };
+    expect(defaultTarget(s)).toBe("2030-2");
+    expect(gradeAt({ ...s, targetTerm: "2030-2" }, "2027-1")).toBe(0);
+    expect(gradeAt({ ...s, targetTerm: "2030-2" }, "2028-1")).toBe(2);
+  });
+
+  it("휴학 예정 학기에는 초안을 배치하지 않는다", () => {
+    const s = freshman({ leaveTerms: ["2027-2"], targetTerm: "2030-1" });
+    expect(s.items.some((i) => i.term === "2027-2")).toBe(false);
+    const ev = evaluate(s, cur);
+    expect(ev.terms.find((t) => t.key === "2027-2")?.leave).toBe(true);
+    expect(ev.diag.capacity.terms).toBe(6);
+  });
+
+  it("작업대에서 휴학으로 바꾸면 그 학기 과목이 다음 학기로 밀리고 용량이 줄어든다", () => {
+    const s = freshman();
+    const before = evaluate(s, cur);
+    const moved = s.items.filter((i) => i.term === "2027-2").length;
+    const next = applyOp(s, { type: "toggleLeave", term: "2027-2" }, cur);
+    const ev = evaluate(next, cur);
+    expect(next.items.some((i) => i.term === "2027-2")).toBe(false);
+    expect(ev.terms.find((t) => t.key === "2028-1")!.items.length).toBeGreaterThanOrEqual(moved);
+    expect(ev.diag.capacity.available).toBe(before.diag.capacity.available - 18);
+    // 다시 누르면 휴학 취소
+    expect(applyOp(next, { type: "toggleLeave", term: "2027-2" }, cur).leaveTerms).toEqual([]);
+  });
+
+  it("휴학 학기에 과목이 남아 있으면 오류와 옮길 학기를 제안한다", () => {
+    const s = freshman();
+    const item = s.items.find((i) => i.term === "2027-1")!;
+    const withLeave = { ...s, leaveTerms: ["2027-1"] };
+    const iss = evaluate(withLeave, cur).issues.find((i) => i.code === "leave_items")!;
+    expect(iss).toBeDefined();
+    const fixed = applyOp(withLeave, iss.actions[0].op, cur);
+    expect(fixed.items.find((i) => i.id === item.id)!.term).not.toBe("2027-1");
   });
 });

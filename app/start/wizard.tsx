@@ -2,8 +2,9 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { AREAS, evaluate, generateDraft, type GeneralCourse, type MajorData, type PlanState } from "@/lib/plan";
-import { compareTerms, defaultTargetTerm, gradeOf, nextTerm, parseTerm, termKey, termLabel, termRange } from "@/lib/terms";
+import Link from "next/link";
+import { AREAS, defaultTarget, evaluate, generateDraft, gradeAt, semesterNo, type GeneralCourse, type MajorData, type PlanState } from "@/lib/plan";
+import { nextTerm, parseTerm, termKey, termLabel, termRange } from "@/lib/terms";
 import { createPlanAction } from "../actions";
 
 type Status = "completed" | "inProgress";
@@ -24,7 +25,9 @@ export default function StartWizard(props: {
   const [step, setStep] = useState(0);
   const [majorId, setMajorId] = useState(majors[0]?.id);
   const [admissionYear, setAdmissionYear] = useState(props.mode === "new" ? parseTerm(currentTerm).year : parseTerm(currentTerm).year - 2);
-  const [targetTerm, setTargetTerm] = useState(defaultTargetTerm(admissionYear));
+  const [pastLeaves, setPastLeaves] = useState(0);
+  const [leaveTerms, setLeaveTerms] = useState<string[]>([]);
+  const [targetTerm, setTargetTerm] = useState(() => defaultTarget({ admissionYear, currentTerm, pastLeaves: 0, leaveTerms: [] }));
   const [maxCredits, setMaxCredits] = useState(18);
   const [taken, setTaken] = useState<Map<number, Status>>(new Map());
   const [interests, setInterests] = useState<Set<number>>(new Set());
@@ -35,7 +38,11 @@ export default function StartWizard(props: {
   const [error, setError] = useState("");
 
   const major = majors.find((m) => m.id === majorId) ?? majors[0];
-  const grade = gradeOf(currentTerm, admissionYear);
+  const termInfo = { admissionYear, currentTerm, targetTerm, pastLeaves, leaveTerms };
+  const grade = gradeAt(termInfo, currentTerm);
+  const semNo = semesterNo(termInfo, currentTerm) ?? 0;
+  const leaveOptions = termRange(nextTerm(currentTerm), termKey(parseTerm(currentTerm).year + 5, 2));
+  const remaining = termRange(nextTerm(currentTerm), targetTerm).filter((t) => !leaveTerms.includes(t)).length;
   const targetOptions = termRange(nextTerm(currentTerm), termKey(parseTerm(currentTerm).year + 8, 2));
 
   const allCourses = useMemo(
@@ -56,10 +63,13 @@ export default function StartWizard(props: {
     setTaken(next);
   };
 
-  const changeAdmission = (y: number) => {
-    setAdmissionYear(y);
-    const t = defaultTargetTerm(y);
-    setTargetTerm(compareTerms(t, currentTerm) > 0 ? t : nextTerm(nextTerm(currentTerm)));
+  // 입학년도·휴학이 바뀌면 희망 졸업학기 기본값(4학년 2학기)도 다시 계산
+  const retarget = (next: { admissionYear?: number; pastLeaves?: number; leaveTerms?: string[] }) => {
+    const v = { admissionYear, pastLeaves, leaveTerms, ...next };
+    setAdmissionYear(v.admissionYear);
+    setPastLeaves(v.pastLeaves);
+    setLeaveTerms(v.leaveTerms);
+    setTargetTerm(defaultTarget({ ...v, currentTerm }));
   };
 
   const finish = () => {
@@ -73,6 +83,8 @@ export default function StartWizard(props: {
       completed: [...taken].filter(([, s]) => s === "completed").map(([id]) => id),
       inProgress: [...taken].filter(([, s]) => s === "inProgress").map(([id]) => id),
       interests: [...interests],
+      pastLeaves,
+      leaveTerms,
       items: [],
     };
     const cur = { year: curriculumYear, major, general };
@@ -120,14 +132,42 @@ export default function StartWizard(props: {
           </label>
           <label className="flex flex-col gap-1">
             <span className="text-sm font-medium">입학년도</span>
-            <select className={field} value={admissionYear} onChange={(e) => changeAdmission(Number(e.target.value))}>
+            <select className={field} value={admissionYear} onChange={(e) => retarget({ admissionYear: Number(e.target.value) })}>
               {Array.from({ length: 8 }, (_, i) => parseTerm(currentTerm).year - i).map((y) => <option key={y} value={y}>{y}학번</option>)}
             </select>
           </label>
           <div className="flex flex-col gap-1">
             <span className="text-sm font-medium">현재 학기</span>
-            <p className={`${field} text-zinc-600 dark:text-zinc-400`}>{termLabel(currentTerm)} · {grade}학년{grade > 4 ? " (초과학기)" : ""}</p>
+            <p className={`${field} text-zinc-600 dark:text-zinc-400`}>
+              {termLabel(currentTerm)} · {grade > 4 ? "초과학기" : `${grade}학년 ${semNo % 2 === 0 ? 2 : 1}학기`} <span className="text-xs">(자동)</span>
+            </p>
           </div>
+          {props.mode === "check" ? (
+            <label className="flex flex-col gap-1 sm:col-span-2">
+              <span className="text-sm font-medium">지금까지 휴학한 학기 수 <span className="font-normal text-zinc-500">(군휴학 포함)</span></span>
+              <span className="flex items-center gap-3">
+                <input className={`${field} w-24`} type="number" min={0} max={20} value={pastLeaves}
+                  onChange={(e) => retarget({ pastLeaves: Math.max(0, Math.min(20, Number(e.target.value) || 0)) })} />
+                <span className="text-sm">학기 → 지금 <b>{grade > 4 ? "초과학기" : `${grade}학년 ${semNo % 2 === 0 ? 2 : 1}학기`}</b>로 계산했어요 (입학 후 {semNo}번째 학기)</span>
+              </span>
+            </label>
+          ) : (
+            <div className="flex flex-col gap-1 sm:col-span-2">
+              <span className="text-sm font-medium">휴학 예정 학기 <span className="font-normal text-zinc-500">(없으면 그대로 두세요. 군입대 등)</span></span>
+              <div className="flex flex-wrap gap-1.5">
+                {leaveOptions.map((t) => {
+                  const on = leaveTerms.includes(t);
+                  return (
+                    <button key={t} type="button"
+                      onClick={() => retarget({ leaveTerms: on ? leaveTerms.filter((x) => x !== t) : [...leaveTerms, t].sort() })}
+                      className={`rounded-full px-3 py-1 text-xs ${on ? "bg-amber-500 text-white" : "border border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"}`}>
+                      {termLabel(t)}{on && " · 휴학"}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           <label className="flex flex-col gap-1">
             <span className="text-sm font-medium">희망 졸업학기</span>
             <select className={field} value={targetTerm} onChange={(e) => setTargetTerm(e.target.value)}>
@@ -144,7 +184,7 @@ export default function StartWizard(props: {
             </p>
           )}
           <p className="text-sm text-zinc-500 sm:col-span-2">
-            남은 학기: {termLabel(nextTerm(currentTerm))} ~ {termLabel(targetTerm)} ({termRange(nextTerm(currentTerm), targetTerm).length}학기)
+            남은 학기: {termLabel(nextTerm(currentTerm))} ~ {termLabel(targetTerm)} (다니는 학기 {remaining}개{leaveTerms.length > 0 && `, 휴학 ${leaveTerms.length}학기 제외`}) · 희망 졸업학기는 4학년 2학기 기준으로 자동 계산돼요
           </p>
         </section>
       )}
@@ -220,7 +260,11 @@ export default function StartWizard(props: {
       {error && <p className="mt-4 rounded border border-red-300 bg-red-50 p-3 text-sm text-red-700">{error}</p>}
 
       <div className="mt-6 flex justify-between">
-        <button disabled={step === 0} onClick={() => setStep(step - 1)} className="rounded-lg border border-zinc-300 px-4 py-2 disabled:opacity-40 dark:border-zinc-700">← 이전</button>
+        {step === 0 ? (
+          <Link href="/" className="rounded-lg border border-zinc-300 px-4 py-2 dark:border-zinc-700">← 처음으로</Link>
+        ) : (
+          <button onClick={() => setStep(step - 1)} className="rounded-lg border border-zinc-300 px-4 py-2 dark:border-zinc-700">← 이전</button>
+        )}
         {step < STEPS.length - 1 ? (
           <button onClick={() => setStep(step + 1)} className="rounded-lg bg-teal-700 px-5 py-2 text-white">다음 →</button>
         ) : (
